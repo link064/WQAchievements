@@ -25,6 +25,9 @@ WQA.data.custom = { wqID = "", rewardID = "", rewardType = "none", questType = "
 WQA.data.custom.mission = { missionID = "", rewardID = "", rewardType = "none" }
 --WQA.data.customReward = 0
 
+-- Cache for successfully processed quests to avoid reprocessing
+WQA.processedQuestCache = {}
+
 local ldb = LibStub:GetLibrary("LibDataBroker-1.1")
 local dataobj =
 	ldb:NewDataObject(
@@ -918,6 +921,7 @@ function WQA:Reward()
 	self.event:UnregisterEvent("GET_ITEM_INFO_RECEIVED")
 	self.rewards = false
 	local retry = false
+	local questsProcessed = 0
 
 	-- Azerite Traits
 	if self.db.profile.options.reward.gear.azeriteTraits ~= "" then
@@ -934,82 +938,99 @@ function WQA:Reward()
 				if quests then
 					for i = 1, #quests do
 						local questID = quests[i].questID
-						local questTagInfo = GetQuestTagInfo(questID)
-						local worldQuestType = 0
-						if questTagInfo then
-							worldQuestType = questTagInfo.worldQuestType
-						end
-
-						if self.questList[questID] and not self.db.profile.options.reward.general.worldQuestType[worldQuestType] then
-							self.questList[questID] = nil
-						end
-
-						if
-							self.db.profile.options.zone[C_TaskQuest.GetQuestZoneID(questID)] == true and
-							self.db.profile.options.reward.general.worldQuestType[worldQuestType]
-						then
-							-- 100 different World Quests achievements
-							if QuestUtils_IsQuestWorldQuest(questID) and not self.db.global.completed[questID] then
-								local zoneID = C_TaskQuest.GetQuestZoneID(questID)
-								local exp = 0
-								for expansion, zones in pairs(WQA.ZoneIDList) do
-									for _, v in pairs(zones) do
-										if zoneID == v then
-											exp = expansion
-										end
-									end
-								end
-
-								if
-									self.db.profile.achievements[11189] ~= "disabled" and not select(4, GetAchievementInfo(11189)) and exp == 7 and
-									mapID ~= 830 and
-									mapID ~= 885 and
-									mapID ~= 882
-								then
-									self:AddRewardToQuest(questID, "ACHIEVEMENT", 11189)
-								elseif
-									self.db.profile.achievements[13144] ~= "disabled" and not select(4, GetAchievementInfo(13144)) and exp == 8
-								then
-									self:AddRewardToQuest(questID, "ACHIEVEMENT", 13144)
-								elseif
-									self.db.profile.achievements[14758] ~= "disabled" and not select(4, GetAchievementInfo(14758)) and exp == 9
-								then
-									self:AddRewardToQuest(questID, "ACHIEVEMENT", 14758)
-								end
-							end
-
-							-- Skip reward data preload for quests with inaccurate or misleading Blizzard API results
-							if not SkipRewardDataPreloadQuests[questID] and HaveQuestData(questID) and not HaveQuestRewardData(questID) then
-								C_TaskQuest.RequestPreloadRewardData(questID)
-								retry = true
-							end
-							retry = self:CheckItems(questID) or retry
-							self:CheckCurrencies(questID)
-
-							-- Profession
-							local tradeskillLineID
+						
+						-- Check if this quest has already been successfully processed for this map
+						local cacheKey = mapID .. "_" .. questID
+						if not self.processedQuestCache[cacheKey] then
+							questsProcessed = questsProcessed + 1
+							local questRetry = false
+							
+							local questTagInfo = GetQuestTagInfo(questID)
+							local worldQuestType = 0
 							if questTagInfo then
-								tradeskillLineID = GetQuestTagInfo(questID).tradeskillLineID
+								worldQuestType = questTagInfo.worldQuestType
 							end
 
-							if tradeskillLineID then
-								local professionName = C_TradeSkillUI.GetTradeSkillDisplayName(tradeskillLineID)
-								local zoneID = C_TaskQuest.GetQuestZoneID(questID)
-								local exp = 0
-								for expansion, zones in pairs(WQA.ZoneIDList) do
-									for _, v in pairs(zones) do
-										if zoneID == v then
-											exp = expansion
+							if self.questList[questID] and not self.db.profile.options.reward.general.worldQuestType[worldQuestType] then
+								self.questList[questID] = nil
+							end
+
+							if
+								self.db.profile.options.zone[C_TaskQuest.GetQuestZoneID(questID)] == true and
+								self.db.profile.options.reward.general.worldQuestType[worldQuestType]
+							then
+								-- 100 different World Quests achievements
+								if QuestUtils_IsQuestWorldQuest(questID) and not self.db.global.completed[questID] then
+									local zoneID = C_TaskQuest.GetQuestZoneID(questID)
+									local exp = 0
+									for expansion, zones in pairs(WQA.ZoneIDList) do
+										for _, v in pairs(zones) do
+											if zoneID == v then
+												exp = expansion
+											end
 										end
+									end
+
+									if
+										self.db.profile.achievements[11189] ~= "disabled" and not select(4, GetAchievementInfo(11189)) and exp == 7 and
+										mapID ~= 830 and
+										mapID ~= 885 and
+										mapID ~= 882
+									then
+										self:AddRewardToQuest(questID, "ACHIEVEMENT", 11189)
+									elseif
+										self.db.profile.achievements[13144] ~= "disabled" and not select(4, GetAchievementInfo(13144)) and exp == 8
+									then
+										self:AddRewardToQuest(questID, "ACHIEVEMENT", 13144)
+									elseif
+										self.db.profile.achievements[14758] ~= "disabled" and not select(4, GetAchievementInfo(14758)) and exp == 9
+									then
+										self:AddRewardToQuest(questID, "ACHIEVEMENT", 14758)
 									end
 								end
 
-								if
-									not self.db.char[exp].profession[tradeskillLineID].isMaxLevel and
-									self.db.profile.options.reward[exp].profession[tradeskillLineID].skillup
-								then
-									self:AddRewardToQuest(questID, "PROFESSION_SKILLUP", professionName)
+								-- Skip reward data preload for quests with inaccurate or misleading Blizzard API results
+								if not SkipRewardDataPreloadQuests[questID] and HaveQuestData(questID) and not HaveQuestRewardData(questID) then
+									C_TaskQuest.RequestPreloadRewardData(questID)
+									questRetry = true
 								end
+								questRetry = self:CheckItems(questID) or questRetry
+								self:CheckCurrencies(questID)
+
+								-- Profession
+								local tradeskillLineID
+								if questTagInfo then
+									tradeskillLineID = GetQuestTagInfo(questID).tradeskillLineID
+								end
+
+								if tradeskillLineID then
+									local professionName = C_TradeSkillUI.GetTradeSkillDisplayName(tradeskillLineID)
+									local zoneID = C_TaskQuest.GetQuestZoneID(questID)
+									local exp = 0
+									for expansion, zones in pairs(WQA.ZoneIDList) do
+										for _, v in pairs(zones) do
+											if zoneID == v then
+												exp = expansion
+											end
+										end
+									end
+
+									if
+										not self.db.char[exp].profession[tradeskillLineID].isMaxLevel and
+										self.db.profile.options.reward[exp].profession[tradeskillLineID].skillup
+									then
+										self:AddRewardToQuest(questID, "PROFESSION_SKILLUP", professionName)
+									end
+								end
+							end
+							
+							-- Set global retry flag if this quest needs retry
+							if questRetry then
+								retry = true
+							else
+								-- Add quest to cache since processing completed successfully
+								local cacheKey = mapID .. "_" .. questID
+								self.processedQuestCache[cacheKey] = GetTime()
 							end
 						end
 					end
@@ -1017,6 +1038,8 @@ function WQA:Reward()
 			end
 		end
 	end
+
+	print("Quests processed: " .. questsProcessed)
 
 	if retry == true then
 		self.Debug("|cFFFF0000<<<RETRY>>>|r")
